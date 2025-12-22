@@ -23,15 +23,15 @@ function buildContent() {
   return `🚀 VTF 更新\n\n时间: ${now}\n\nLP 机制与风险管理（持续更新）`;
 }
 
-// ========= Telegram =========
-async function sendTelegram(text, TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID) {
+// ========= Telegram Channel (HTTP API) =========
+async function sendTelegramChannel(text, TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID) {
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
   const res = await axios.post(url, {
     chat_id: TELEGRAM_CHANNEL_ID,
     text,
     disable_web_page_preview: true,
   });
-  console.log("[TELEGRAM OK] message_id =", res.data.result.message_id);
+  console.log("[TELEGRAM OK] message_id =", res.data?.result?.message_id);
 }
 
 // ========= Discord =========
@@ -42,16 +42,57 @@ async function sendDiscord(text, DISCORD_WEBHOOK_URL) {
     { content: text },
     { headers: { "Content-Type": "application/json" } }
   );
-  console.log("[DISCORD OK] id =", res.data.id);
+  console.log("[DISCORD OK] id =", res.data?.id);
 }
 
 // ========= 双平台 =========
 async function postBoth(env) {
   const text = buildContent();
   await Promise.all([
-    sendTelegram(text, env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_CHANNEL_ID),
+    sendTelegramChannel(text, env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_CHANNEL_ID),
     sendDiscord(text, env.DISCORD_WEBHOOK_URL),
   ]);
+}
+
+// ========= Telegram Private Chat (Polling) =========
+function startPrivateBotPolling(TELEGRAM_BOT_TOKEN) {
+  console.log("🔍 TELEGRAM TOKEN PRESENT =", !!TELEGRAM_BOT_TOKEN);
+
+  // 启动 polling
+  const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
+  console.log("📡 TELEGRAM POLLING STARTED ✅");
+
+  // 打印 bot 身份，防止 token 对错 bot
+  bot
+    .getMe()
+    .then((me) => console.log("🤖 BOT getMe =", { id: me.id, username: me.username }))
+    .catch((e) => console.log("⚠️ bot.getMe failed:", e?.message || e));
+
+  // 监听任何消息（核心调试点）
+  bot.on("message", async (msg) => {
+    const chatId = msg.chat?.id;
+    const chatType = msg.chat?.type;
+    const text = msg.text;
+
+    console.log("📩 UPDATE RECEIVED =", { chatId, chatType, text });
+
+    // 只在私聊回复（避免在频道乱回）
+    if (chatType === "private" && chatId) {
+      const reply = `✅ Bot alive (private)\n\n你发的是：${text || ""}`;
+      try {
+        await bot.sendMessage(chatId, reply);
+        console.log("✅ REPLY SENT to", chatId);
+      } catch (e) {
+        console.log("❌ sendMessage failed:", e?.message || e);
+      }
+    }
+  });
+
+  bot.on("polling_error", (err) => {
+    console.log("⚠️ polling_error:", err?.message || err);
+  });
+
+  return bot;
 }
 
 // ========= 启动入口（runtime） =========
@@ -70,12 +111,15 @@ function main() {
 
   console.log("[BOOT] worker started. TZ=America/New_York");
 
-  // 启动即发一次
+  // ✅ 启动私聊 polling（关键新增）
+  startPrivateBotPolling(env.TELEGRAM_BOT_TOKEN);
+
+  // 启动即发一次（频道+Discord）
   postBoth(env).catch((err) =>
     console.error("[POST ERROR]", err?.response?.data || err.message)
   );
 
-  // 每 10 分钟一次
+  // 每 10 分钟一次（频道+Discord）
   cron.schedule("*/10 * * * *", () => {
     console.log("[CRON] trigger");
     postBoth(env).catch((err) =>
