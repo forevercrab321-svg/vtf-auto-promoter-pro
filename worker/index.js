@@ -1,5 +1,6 @@
 import axios from "axios";
 import TelegramBot from "node-telegram-bot-api";
+import cron from "node-cron";
 
 console.log("🚨 WORKER FILE LOADED", new Date().toISOString());
 
