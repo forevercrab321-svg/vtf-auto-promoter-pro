@@ -89,7 +89,8 @@ function startPrivateBotPolling({ TELEGRAM_BOT_TOKEN, GEMINI_API_KEY, GEMINI_MOD
     const chatType = msg.chat?.type;
     const text = msg.text || "";
 
-    console.log("📩 UPDATE RECEIVED =", { chatId, chatType, text });
+console.log("🔍 GEMINI KEY PRESENT =", !!process.env.GEMINI_API_KEY);
+console.log("🔍 GEMINI MODEL =", process.env.GEMINI_MODEL || "gemini-pro-flash");
 
     // 只在私聊回复
     if (chatType === "private" && chatId) {
