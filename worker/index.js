@@ -1,13 +1,13 @@
 import express from "express";
 import axios from "axios";
-import TelegramBot from "node-telegram-bot-api";
 import cron from "node-cron";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-/* =========================
-   BOOT & ENV
-========================= */
-console.log("🚀 WORKER BOOT", new Date().toISOString());
-
+/**
+ * =========================
+ * ENV
+ * =========================
+ */
 function must(name, val) {
   if (!val) {
     console.error(`[ENV MISSING] ${name}`);
@@ -21,242 +21,253 @@ const env = {
   DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL,
   GEMINI_API_KEY: process.env.GEMINI_API_KEY,
   GEMINI_MODEL: process.env.GEMINI_MODEL || "gemini-2.5-pro",
-  PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL,
-  WEBHOOK_SECRET: process.env.WEBHOOK_SECRET, // ✅ matches your Railway variable name
+
+  // For Webhook
+  PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL, // e.g. https://xxx.up.railway.app
+  WEBHOOK_SECRET: process.env.WEBHOOK_SECRET,   // e.g. vtf_webhook_2025_private
+
+  // Railway sets PORT (your log shows 8080)
+  PORT: process.env.PORT || "8080",
 };
 
-Object.entries(env).forEach(([k, v]) => must(k, v));
-console.log("🔎 GEMINI_MODEL =", env.GEMINI_MODEL);
+must("TELEGRAM_BOT_TOKEN", env.TELEGRAM_BOT_TOKEN);
+must("TELEGRAM_CHANNEL_ID", env.TELEGRAM_CHANNEL_ID);
+must("DISCORD_WEBHOOK_URL", env.DISCORD_WEBHOOK_URL);
+must("GEMINI_API_KEY", env.GEMINI_API_KEY);
+must("PUBLIC_BASE_URL", env.PUBLIC_BASE_URL);
+must("WEBHOOK_SECRET", env.WEBHOOK_SECRET);
 
-/* =========================
-   Helpers: language detect
-========================= */
-function detectLang(text) {
-  const s = (text || "").trim();
-  if (!s) return "en";
+// normalize base url (no trailing slash)
+env.PUBLIC_BASE_URL = env.PUBLIC_BASE_URL.replace(/\/+$/, "");
 
-  const hasCJK = /[\u4e00-\u9fff]/.test(s);
-  const hasLatin = /[A-Za-z]/.test(s);
-
-  if (hasCJK && hasLatin) return "bi";
-  if (hasCJK) return "zh";
-  return "en";
+/**
+ * =========================
+ * Telegram helpers
+ * =========================
+ */
+async function tgSendMessage(chatId, text) {
+  const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`;
+  const res = await axios.post(
+    url,
+    { chat_id: chatId, text, disable_web_page_preview: true },
+    { timeout: 30000 }
+  );
+  return res.data;
 }
 
-function buildSystemPrompt(lang) {
-  // Give Gemini very explicit instructions.
-  if (lang === "zh") {
-    return [
-      "你是 VTF Auto Pilot。",
-      "用中文回答，专业、直接、可执行。",
-      "如果问题涉及风控/合规，给出清晰的风险提示与建议。",
-      "不要废话，不要自我介绍。",
-    ].join("\n");
-  }
-  if (lang === "en") {
-    return [
-      "You are VTF Auto Pilot.",
-      "Reply in English. Be professional, direct, and actionable.",
-      "If risk/compliance is involved, add clear cautions and recommendations.",
-      "No fluff. No self-introduction.",
-    ].join("\n");
-  }
-  // bilingual
-  return [
-    "You are VTF Auto Pilot.",
-    "Return a bilingual answer: first Chinese, then English.",
-    "Be professional, direct, and actionable. No fluff.",
-    "If risk/compliance is involved, add clear cautions and recommendations.",
-  ].join("\n");
-}
-
-/* =========================
-   Gemini call (v1)
-========================= */
-async function callGemini({ apiKey, model, userText }) {
-  const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${apiKey}`;
-
-  const payload = {
-    contents: [{ role: "user", parts: [{ text: userText }] }],
-    generationConfig: {
-      temperature: 0.6,
-      maxOutputTokens: 900,
+async function tgSetWebhook() {
+  const webhookUrl = `${env.PUBLIC_BASE_URL}/telegram/${env.WEBHOOK_SECRET}`;
+  const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/setWebhook`;
+  const res = await axios.post(
+    url,
+    {
+      url: webhookUrl,
+      allowed_updates: ["message"],
+      drop_pending_updates: true,
     },
-  };
-
-  const res = await axios.post(url, payload, {
-    headers: { "Content-Type": "application/json" },
-    timeout: 60000,
-  });
-
-  return res.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    { timeout: 30000 }
+  );
+  console.log("[WEBHOOK]", "setWebhook =>", res.data);
+  return res.data;
 }
 
-/* =========================
-   Telegram Webhook (NO polling -> NO 409)
-========================= */
-const bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN, { polling: false });
+async function tgGetWebhookInfo() {
+  const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getWebhookInfo`;
+  const r = await axios.get(url, { timeout: 30000 });
+  console.log("[WEBHOOK]", "getWebhookInfo =>", r.data);
+  return r.data;
+}
 
-const BASE = env.PUBLIC_BASE_URL.replace(/\/$/, "");
-const WEBHOOK_PATH = `/telegram/webhook/${env.WEBHOOK_SECRET}`;
-const WEBHOOK_URL = `${BASE}${WEBHOOK_PATH}`;
+/**
+ * =========================
+ * Discord helper
+ * =========================
+ */
+async function sendDiscord(text) {
+  const url = `${env.DISCORD_WEBHOOK_URL}?wait=true`;
+  const res = await axios.post(
+    url,
+    { content: text },
+    { headers: { "Content-Type": "application/json" }, timeout: 30000 }
+  );
+  console.log("[DISCORD OK] id =", res.data?.id);
+}
 
-/* =========================
-   Express server
-========================= */
-const app = express();
-app.use(express.json());
-
-app.get("/", (_, res) => res.status(200).send("ok"));
-
-app.post(WEBHOOK_PATH, async (req, res) => {
-  // Telegram wants quick 200
-  res.sendStatus(200);
-
-  const msg = req.body?.message;
-  if (!msg) return;
-
-  const chatId = msg.chat?.id;
-  const chatType = msg.chat?.type;
-  const text = (msg.text || "").trim();
-
-  console.log("📩 UPDATE =", { chatId, chatType, text });
-
-  if (chatType !== "private" || !chatId) return;
-  if (!text) return;
-
-  // /start bilingual
-  if (text === "/start") {
-    await bot.sendMessage(
-      chatId,
-      [
-        "✅ Bot alive (webhook)",
-        "你可以直接问我：VTF / LP / 风控 / 操作步骤等。",
-        "",
-        "✅ Bot is online (webhook)",
-        "Ask me about: VTF / LP / risk control / step-by-step operations.",
-      ].join("\n"),
-      { disable_web_page_preview: true }
-    );
-    return;
-  }
-
-  // detect language for response
-  const lang = detectLang(text);
-  const sys = buildSystemPrompt(lang);
-
-  // Build prompt
-  const prompt =
-    `${sys}\n\n` +
-    `User message:\n${text}\n\n` +
-    `Requirements:\n` +
-    `- Give clear steps if the user asks "how"\n` +
-    `- Keep it concise but complete\n`;
-
-  try {
-    const answer = await callGemini({
-      apiKey: env.GEMINI_API_KEY,
-      model: env.GEMINI_MODEL,
-      userText: prompt,
-    });
-
-    console.log("[AI] reply_head =", answer.slice(0, 80));
-
-    const fallback =
-      lang === "zh"
-        ? "⚠️ AI 没返回内容，请换个问法。"
-        : lang === "en"
-        ? "⚠️ AI returned empty. Please rephrase and try again."
-        : "⚠️ AI returned empty. 请换个问法再试一次 / Please rephrase and try again.";
-
-    await bot.sendMessage(chatId, answer || fallback, {
-      disable_web_page_preview: true,
-    });
-  } catch (err) {
-    console.error("[AI ERROR]", err?.response?.data || err.message);
-
-    const msg2 =
-      "⚠️ AI 暂时不可用（已记录错误）。请稍后再试。\n" +
-      "⚠️ AI is temporarily unavailable (error logged). Please try again later.";
-
-    await bot.sendMessage(chatId, msg2, { disable_web_page_preview: true });
-  }
-});
-
-/* =========================
-   Scheduled channel + Discord (bilingual)
-========================= */
-function buildChannelContentBilingual() {
+/**
+ * =========================
+ * Channel content (bilingual)
+ * =========================
+ */
+function buildChannelContent() {
   const now = new Date().toISOString();
-  return [
-    "🚀 VTF Update",
-    `Time: ${now}`,
-    "",
-    "Topic: LP mechanism & risk management (ongoing)",
-    "",
-    "🚀 VTF 更新",
-    `时间：${now}`,
-    "",
-    "主题：LP 机制与风险管理（持续更新）",
-  ].join("\n");
+  return `🚀 VTF Update
+Time: ${now}
+Topic: LP mechanism & risk management (ongoing)
+
+🚀 VTF 更新
+时间: ${now}
+主题: LP 机制与风险管理（持续更新）`;
 }
 
 async function sendTelegramChannel(text) {
-  await axios.post(
-    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+  const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`;
+  const res = await axios.post(
+    url,
     {
       chat_id: env.TELEGRAM_CHANNEL_ID,
       text,
       disable_web_page_preview: true,
     },
-    { timeout: 60000 }
+    { timeout: 30000 }
   );
-  console.log("[TELEGRAM CHANNEL OK]");
+  console.log("[TELEGRAM CHANNEL OK] message_id =", res.data?.result?.message_id);
 }
 
-async function sendDiscord(text) {
-  await axios.post(
-    env.DISCORD_WEBHOOK_URL,
-    { content: text },
-    { headers: { "Content-Type": "application/json" }, timeout: 60000 }
-  );
-  console.log("[DISCORD OK]");
+/**
+ * =========================
+ * Gemini (official SDK)
+ * =========================
+ */
+const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
+
+function isLikelyChinese(s) {
+  return /[\u4e00-\u9fff]/.test(s || "");
 }
 
-async function postBoth() {
-  const text = buildChannelContentBilingual();
-  await Promise.all([sendTelegramChannel(text), sendDiscord(text)]);
+async function askGeminiBilingual(userText) {
+  const model = genAI.getGenerativeModel({ model: env.GEMINI_MODEL });
+
+  // 强制让它输出中英双语（先英文后中文）
+  const prompt = `You are "VTF Auto Pilot".
+Answer in BOTH English and Chinese in the same message.
+- Keep it professional, actionable, and concise.
+- Do not mention policy or safety boilerplate.
+- Structure:
+English:
+<answer>
+
+中文：
+<回答>
+
+User: ${userText}`;
+
+  const result = await model.generateContent(prompt);
+  const text = result?.response?.text?.() || "";
+  return text.trim();
 }
 
-// start-up post once
-postBoth().catch((e) => console.error("[POST ERROR]", e?.message));
+/**
+ * =========================
+ * Express webhook server
+ * =========================
+ */
+const app = express();
+app.use(express.json({ limit: "1mb" }));
 
-// every 10 minutes
-cron.schedule("*/10 * * * *", () => {
-  console.log("[CRON] trigger");
-  postBoth().catch((e) => console.error("[CRON ERROR]", e?.message));
+app.get("/", (req, res) => {
+  res.status(200).send("OK");
 });
 
-/* =========================
-   Listen & set webhook
-========================= */
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, async () => {
-  console.log("[WEB] listening on", PORT);
+// Telegram webhook endpoint
+app.post(`/telegram/${env.WEBHOOK_SECRET}`, async (req, res) => {
+  // Always respond 200 quickly to Telegram
+  res.sendStatus(200);
 
   try {
-    await bot.setWebHook(WEBHOOK_URL);
-    console.log("[WEBHOOK] set to", WEBHOOK_URL);
+    const update = req.body || {};
+    const msg = update.message;
+    if (!msg) return;
 
-    const info = await bot.getWebHookInfo();
-    console.log("[WEBHOOK INFO]", info);
-  } catch (e) {
-    console.error("[WEBHOOK SET ERROR]", e?.response?.data || e.message);
+    const chatId = msg.chat?.id;
+    const chatType = msg.chat?.type; // private/group/supergroup/channel
+    const text = (msg.text || "").trim();
+
+    console.log("📩 UPDATE RECEIVED =", { chatId, chatType, text });
+
+    // only private chat
+    if (chatType !== "private" || !chatId) return;
+
+    // /start bilingual
+    if (text === "/start") {
+      await tgSendMessage(
+        chatId,
+        `✅ Bot is alive (private)
+You can ask: VTF / LP / risk / steps / how-to
+
+✅ 机器人已在线（私聊）
+你可以直接问：VTF / LP / 风控 / 操作步骤 / 教程`
+      );
+      return;
+    }
+
+    if (!text) return;
+
+    // Gemini bilingual reply
+    const answer = await askGeminiBilingual(text);
+    if (!answer) {
+      await tgSendMessage(
+        chatId,
+        `⚠️ AI returned empty response. Please try again.
+⚠️ AI 没有返回内容，请换个问法再试。`
+      );
+      return;
+    }
+
+    await tgSendMessage(chatId, answer);
+  } catch (err) {
+    console.error("[WEBHOOK HANDLER ERROR]", err?.response?.data || err.message);
   }
 });
 
-// heartbeat
-setInterval(() => {
-  console.log("[TICK]", new Date().toISOString(), "alive ✅");
-}, 30_000);
+/**
+ * =========================
+ * Boot
+ * =========================
+ */
+async function boot() {
+  console.log("🚀 WORKER BOOT", new Date().toISOString());
+  console.log("🔎 GEMINI_MODEL =", env.GEMINI_MODEL);
+  console.log("🌐 PUBLIC_BASE_URL =", env.PUBLIC_BASE_URL);
+  console.log("🔐 WEBHOOK_SECRET =", env.WEBHOOK_SECRET);
+  console.log("🧩 PORT =", env.PORT);
+
+  // Set webhook with retry (domain刚生效时，第一次可能失败)
+  for (let i = 1; i <= 6; i++) {
+    try {
+      await tgSetWebhook();
+      await tgGetWebhookInfo();
+      break;
+    } catch (e) {
+      console.error(`[WEBHOOK SET RETRY ${i}]`, e?.response?.data || e.message);
+      await new Promise((r) => setTimeout(r, 3000 * i));
+    }
+  }
+
+  // Post to channel + discord immediately
+  const postBoth = async () => {
+    const text = buildChannelContent();
+    await Promise.all([sendTelegramChannel(text), sendDiscord(text)]);
+  };
+
+  postBoth().catch((e) =>
+    console.error("[POST ERROR]", e?.response?.data || e.message)
+  );
+
+  // every 10 minutes
+  cron.schedule("*/10 * * * *", () => {
+    console.log("[CRON] trigger");
+    postBoth().catch((e) =>
+      console.error("[CRON ERROR]", e?.response?.data || e.message)
+    );
+  });
+
+  // heartbeat
+  setInterval(() => {
+    console.log("[TICK]", new Date().toISOString(), "alive ✅");
+  }, 30_000);
+}
+
+app.listen(Number(env.PORT), () => {
+  console.log(`[WEB] listening on ${env.PORT}`);
+  boot().catch((e) => console.error("[BOOT ERROR]", e?.response?.data || e.message));
+});
