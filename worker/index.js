@@ -1,14 +1,9 @@
 import axios from "axios";
 import TelegramBot from "node-telegram-bot-api";
 import cron from "node-cron";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 console.log("🚨 WORKER FILE LOADED", new Date().toISOString());
-
-/**
- * ✅ 关键修复点：
- * - 不在文件顶层读取 process.env（build 阶段会触发 railpack secrets 检查）
- * - 在 runtime 启动后再读取 & 校验
- */
 
 function must(name, val) {
   if (!val) {
@@ -17,13 +12,13 @@ function must(name, val) {
   }
 }
 
-// ========= 内容 =========
+// ========= 内容（频道/广告）=========
 function buildContent() {
   const now = new Date().toISOString();
   return `🚀 VTF 更新\n\n时间: ${now}\n\nLP 机制与风险管理（持续更新）`;
 }
 
-// ========= Telegram Channel (HTTP API) =========
+// ========= Telegram Channel（HTTP API）=========
 async function sendTelegramChannel(text, TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID) {
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
   const res = await axios.post(url, {
@@ -54,36 +49,73 @@ async function postBoth(env) {
   ]);
 }
 
-// ========= Telegram Private Chat (Polling) =========
-function startPrivateBotPolling(TELEGRAM_BOT_TOKEN) {
-  console.log("🔍 TELEGRAM TOKEN PRESENT =", !!TELEGRAM_BOT_TOKEN);
+// ========= Gemini AI Reply =========
+async function geminiReply({ apiKey, modelName, userText }) {
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: modelName || "gemini-1.5-flash" });
 
-  // 启动 polling
+  const system = `
+你是 VTF Auto Pilot，一个面向普通用户的加密教育与项目助手。
+目标：
+- 用清晰、专业、可执行的方式解释：VTF / BNB Chain / LP / 风险管理 / 防诈骗
+- 不承诺收益；不提供“买卖建议”；不要求用户转账
+- 任何涉及私钥/助记词/转账/收益保证：必须提醒风险并拒绝协助
+语言：用户中文就中文，英文就英文。
+`.trim();
+
+  const prompt = `${system}\n\n用户：${userText}\n\n请给出专业、可执行的回答：`;
+
+  const result = await model.generateContent(prompt);
+  const text = result?.response?.text?.();
+  return (text && text.trim()) || "我现在没生成出有效回复，请你换个说法再问一次。";
+}
+
+// ========= Telegram 私聊（Polling）=========
+function startPrivateBotPolling({ TELEGRAM_BOT_TOKEN, GEMINI_API_KEY, GEMINI_MODEL }) {
+  console.log("🔍 TELEGRAM TOKEN PRESENT =", !!TELEGRAM_BOT_TOKEN);
+  console.log("🔍 GEMINI KEY PRESENT =", !!GEMINI_API_KEY);
+  console.log("🔍 GEMINI MODEL =", GEMINI_MODEL || "gemini-1.5-flash");
+
   const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
   console.log("📡 TELEGRAM POLLING STARTED ✅");
 
-  // 打印 bot 身份，防止 token 对错 bot
   bot
     .getMe()
     .then((me) => console.log("🤖 BOT getMe =", { id: me.id, username: me.username }))
     .catch((e) => console.log("⚠️ bot.getMe failed:", e?.message || e));
 
-  // 监听任何消息（核心调试点）
   bot.on("message", async (msg) => {
     const chatId = msg.chat?.id;
     const chatType = msg.chat?.type;
-    const text = msg.text;
+    const text = msg.text || "";
 
     console.log("📩 UPDATE RECEIVED =", { chatId, chatType, text });
 
-    // 只在私聊回复（避免在频道乱回）
+    // 只在私聊回复
     if (chatType === "private" && chatId) {
-      const reply = `✅ Bot alive (private)\n\n你发的是：${text || ""}`;
       try {
-        await bot.sendMessage(chatId, reply);
-        console.log("✅ REPLY SENT to", chatId);
+        await bot.sendChatAction(chatId, "typing");
+
+        // 指令简单处理
+        if (text.trim() === "/start") {
+          await bot.sendMessage(
+            chatId,
+            "✅ VTF Auto Pilot 已启动。\n\n你可以直接问我：\n- LP 是什么？\n- 无常损失怎么理解？\n- 如何判断钓鱼链接/假合约？\n\n（我不会提供投资建议，也不会让你转账。）"
+          );
+          return;
+        }
+
+        const answer = await geminiReply({
+          apiKey: GEMINI_API_KEY,
+          modelName: GEMINI_MODEL,
+          userText: text,
+        });
+
+        await bot.sendMessage(chatId, answer, { disable_web_page_preview: true });
+        console.log("✅ AI REPLY SENT to", chatId);
       } catch (e) {
-        console.log("❌ sendMessage failed:", e?.message || e);
+        console.log("❌ AI reply failed:", e?.message || e);
+        await bot.sendMessage(chatId, "⚠️ AI 暂时不可用，我稍后恢复。");
       }
     }
   });
@@ -97,22 +129,23 @@ function startPrivateBotPolling(TELEGRAM_BOT_TOKEN) {
 
 // ========= 启动入口（runtime） =========
 function main() {
-  // ✅ 只在运行时读取环境变量
   const env = {
     TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHANNEL_ID: process.env.TELEGRAM_CHANNEL_ID,
     DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    GEMINI_MODEL: process.env.GEMINI_MODEL,
   };
 
-  // ✅ 运行时校验（build 阶段不会触发）
   must("TELEGRAM_BOT_TOKEN", env.TELEGRAM_BOT_TOKEN);
   must("TELEGRAM_CHANNEL_ID", env.TELEGRAM_CHANNEL_ID);
   must("DISCORD_WEBHOOK_URL", env.DISCORD_WEBHOOK_URL);
+  must("GEMINI_API_KEY", env.GEMINI_API_KEY);
 
   console.log("[BOOT] worker started. TZ=America/New_York");
 
-  // ✅ 启动私聊 polling（关键新增）
-  startPrivateBotPolling(env.TELEGRAM_BOT_TOKEN);
+  // ✅ 私聊 AI 启动
+  startPrivateBotPolling(env);
 
   // 启动即发一次（频道+Discord）
   postBoth(env).catch((err) =>
