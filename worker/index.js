@@ -1,5 +1,6 @@
-import axios from "axios";
-import cron from "node-cron";
+console.log("🚨 WORKER FILE LOADED", new Date().toISOString());
+const axios = require("axios");
+const cron = require("node-cron");
 
 /**
  * ✅ 关键修复点：
