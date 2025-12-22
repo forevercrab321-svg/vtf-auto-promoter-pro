@@ -1,6 +1,7 @@
+import axios from "axios";
+import TelegramBot from "node-telegram-bot-api";
+
 console.log("🚨 WORKER FILE LOADED", new Date().toISOString());
-const axios = require("axios");
-const cron = require("node-cron");
 
 /**
  * ✅ 关键修复点：
