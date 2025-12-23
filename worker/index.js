@@ -1,6 +1,7 @@
 import express from "express";
 import axios from "axios";
 import cron from "node-cron";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 function must(name, val) {
   if (!val) {
@@ -9,155 +10,135 @@ function must(name, val) {
   }
 }
 
-const env = {
-  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
-  TELEGRAM_CHANNEL_ID: process.env.TELEGRAM_CHANNEL_ID,
-  DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL,
-  PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL,
-  WEBHOOK_SECRET: process.env.WEBHOOK_SECRET,
-  PORT: process.env.PORT || "8080",
-};
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
 
-must("TELEGRAM_BOT_TOKEN", env.TELEGRAM_BOT_TOKEN);
-must("TELEGRAM_CHANNEL_ID", env.TELEGRAM_CHANNEL_ID);
-must("DISCORD_WEBHOOK_URL", env.DISCORD_WEBHOOK_URL);
-must("PUBLIC_BASE_URL", env.PUBLIC_BASE_URL);
-must("WEBHOOK_SECRET", env.WEBHOOK_SECRET);
+const PUBLIC_BASE_URL_RAW = process.env.PUBLIC_BASE_URL; 
+const WEBHOOK_SECRET = (process.env.WEBHOOK_SECRET || "").trim();
+const PORT = Number(process.env.PORT || "8080");
 
-env.PUBLIC_BASE_URL = env.PUBLIC_BASE_URL.replace(/\/+$/, "");
+must("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN);
+must("TELEGRAM_CHANNEL_ID", TELEGRAM_CHANNEL_ID);
+must("DISCORD_WEBHOOK_URL", DISCORD_WEBHOOK_URL);
+must("GEMINI_API_KEY", GEMINI_API_KEY);
+must("PUBLIC_BASE_URL", PUBLIC_BASE_URL_RAW);
+must("WEBHOOK_SECRET", WEBHOOK_SECRET);
+
+const PUBLIC_BASE_URL = String(PUBLIC_BASE_URL_RAW).trim().replace(/\/+$/, "");
 
 async function tgSendMessage(chatId, text) {
-  const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`;
-  const r = await axios.post(
-    url,
-    { chat_id: chatId, text, disable_web_page_preview: true },
-    { timeout: 30000 }
-  );
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  try {
+    await axios.post(
+      url,
+      { chat_id: chatId, text, disable_web_page_preview: true },
+      { timeout: 30000 }
+    );
+  } catch (e) {
+    console.error("[TG SEND ERROR]", e.message);
+  }
+}
+
+async function tgGetWebhookInfo() {
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo`;
+  const r = await axios.get(url, { timeout: 30000 });
   return r.data;
 }
 
-async function sendTelegramChannel(text) {
-  const url = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`;
-  const res = await axios.post(
-    url,
-    { chat_id: env.TELEGRAM_CHANNEL_ID, text, disable_web_page_preview: true },
-    { timeout: 30000 }
-  );
-  console.log("[TELEGRAM CHANNEL OK] message_id =", res.data?.result?.message_id);
+async function tgSetWebhook() {
+  const webhookUrl = `${PUBLIC_BASE_URL}/telegram/${WEBHOOK_SECRET}`;
+  console.log(`[SETUP] Setting webhook to: ${webhookUrl}`);
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${encodeURIComponent(webhookUrl)}&drop_pending_updates=true&allowed_updates=${encodeURIComponent(JSON.stringify(["message"]))}`;
+  const r = await axios.get(url, { timeout: 30000 });
+  console.log("[WEBHOOK] setWebhook result =>", r.data);
+  return r.data;
 }
 
 async function sendDiscord(text) {
-  const url = `${env.DISCORD_WEBHOOK_URL}?wait=true`;
-  const res = await axios.post(
-    url,
-    { content: text },
-    { headers: { "Content-Type": "application/json" }, timeout: 30000 }
-  );
-  console.log("[DISCORD OK] id =", res.data?.id);
+  const url = `${DISCORD_WEBHOOK_URL}?wait=true`;
+  try {
+    const res = await axios.post(url, { content: text }, { headers: { "Content-Type": "application/json" }, timeout: 30000 });
+    console.log("[DISCORD OK] id =", res.data?.id);
+  } catch (e) { console.error("[DISCORD ERROR]", e.message); }
 }
 
 function buildChannelContent() {
   const now = new Date().toISOString();
-  return `🚀 VTF Update
-Time: ${now}
-Topic: webhook private chat debug
+  return `🚀 VTF Update\nTime: ${now}\nTopic: LP mechanism & risk management (ongoing)\n\n🚀 VTF 更新\n时间: ${now}\n主题: LP 机制与风险管理（持续更新）`;
+}
 
-🚀 VTF 更新
-时间: ${now}
-主题: 私聊 webhook 调试`;
+async function sendTelegramChannel(text) {
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  try {
+    const res = await axios.post(url, { chat_id: TELEGRAM_CHANNEL_ID, text, disable_web_page_preview: true }, { timeout: 30000 });
+    console.log("[TELEGRAM CHANNEL OK] message_id =", res.data?.result?.message_id);
+  } catch (e) { console.error("[TG CHANNEL ERROR]", e.message); }
+}
+
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+async function askGeminiBilingual(userText) {
+  try {
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    const prompt = `You are "VTF Auto Pilot". Answer in BOTH English and Chinese.\nUser: ${userText}`;
+    const result = await model.generateContent(prompt);
+    return (result?.response?.text?.() || "").trim();
+  } catch (e) {
+    console.error("[GEMINI ERROR]", e.message);
+    return "⚠️ AI service busy. Please try again later.";
+  }
 }
 
 const app = express();
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "1mb" }));
+app.get("/", (req, res) => res.status(200).send("OK - VTF Bot is Running"));
 
-// ✅ 全局打印：任何 HTTP 打进来都能看到
-app.use((req, res, next) => {
-  console.log("➡️ HTTP IN", {
-    method: req.method,
-    path: req.path,
-    ct: req.headers["content-type"],
-  });
-  next();
-});
+const webhookRoute = `/telegram/${WEBHOOK_SECRET}`;
+console.log(`[ROUTE REGISTERED] POST ${webhookRoute}`); 
 
-app.get("/", (_, res) => res.status(200).send("OK"));
-app.get("/debug/ping", (_, res) => res.status(200).json({ ok: true, t: Date.now() }));
-
-// ✅ 关键：给 webhook 路由加 GET，让你能用浏览器验证“路由是否真实存在”
-app.get(`/telegram/${env.WEBHOOK_SECRET}`, (_, res) => {
-  res.status(200).send("WEBHOOK ROUTE OK (GET)");
-});
-
-// ✅ Telegram webhook POST
-app.post(`/telegram/${env.WEBHOOK_SECRET}`, async (req, res) => {
+app.post(webhookRoute, async (req, res) => {
   res.sendStatus(200);
-
   try {
     const update = req.body || {};
-    const msg =
-      update.message ||
-      update.edited_message ||
-      update.channel_post ||
-      update.edited_channel_post ||
-      null;
-
-    console.log("📩 RAW UPDATE =", JSON.stringify(update).slice(0, 2000));
-
-    if (!msg) {
-      console.log("⚠️ No message field in update");
-      return;
-    }
-
+    const msg = update.message;
+    if (!msg) return;
     const chatId = msg.chat?.id;
-    const chatType = msg.chat?.type;
+    if (msg.chat?.type !== "private" || !chatId) return;
     const text = (msg.text || "").trim();
+    console.log("📩 UPDATE RECEIVED =", { chatId, text });
 
-    console.log("✅ UPDATE PARSED =", { chatId, chatType, text });
-
-    if (chatType !== "private" || !chatId) return;
-
-    if (text === "/start") {
-      await tgSendMessage(
-        chatId,
-        `✅ Webhook private chat connected.
-Send any text and I will reply.
-
-✅ 私聊 webhook 已连通。
-你随便发一句，我会回复。`
-      );
+    if (text === "/start" || text.toLowerCase() === "start") {
+      await tgSendMessage(chatId, "✅ Bot is alive (private)");
       return;
     }
-
-    if (!text) return;
-
-    await tgSendMessage(chatId, `✅ got: ${text}`);
-  } catch (err) {
-    console.error("[WEBHOOK ERROR]", err?.response?.data || err.message);
-  }
+    if (text.toLowerCase() === "ping") {
+      await tgSendMessage(chatId, "pong ✅");
+      return;
+    }
+    const answer = await askGeminiBilingual(text);
+    await tgSendMessage(chatId, answer);
+  } catch (err) { console.error("[WEBHOOK HANDLER ERROR]", err?.message); }
 });
 
 async function boot() {
-  console.log("🚀 WORKER BOOT");
-  console.log("🌐 PUBLIC_BASE_URL =", env.PUBLIC_BASE_URL);
-  console.log("🔐 WEBHOOK_SECRET =", env.WEBHOOK_SECRET);
-  console.log("🧩 PORT =", env.PORT);
-
-  const postBoth = async () => {
+  console.log("🚀 WORKER BOOT", new Date().toISOString());
+  console.log("🔐 WEBHOOK_SECRET (Used) =", `"${WEBHOOK_SECRET}"`); 
+  for (let i = 1; i <= 6; i++) {
+    try {
+      await tgSetWebhook();
+      break;
+    } catch (e) { await new Promise((r) => setTimeout(r, 3000 * i)); }
+  }
+  cron.schedule("0 * * * *", () => {
+    console.log("[CRON] Hourly trigger");
     const text = buildChannelContent();
-    await Promise.all([sendTelegramChannel(text), sendDiscord(text)]);
-  };
-
-  postBoth().catch((e) => console.error("[POST ERROR]", e?.response?.data || e.message));
-
-  cron.schedule("*/10 * * * *", () => {
-    console.log("[CRON] trigger");
-    postBoth().catch((e) => console.error("[CRON ERROR]", e?.response?.data || e.message));
+    Promise.all([sendTelegramChannel(text), sendDiscord(text)]).catch((e) => console.error(e));
   });
-
-  setInterval(() => console.log("[TICK]", new Date().toISOString(), "alive ✅"), 30000);
 }
 
-app.listen(Number(env.PORT), () => {
-  console.log(`[WEB] listening on ${env.PORT}`);
-  boot().catch((e) => console.error("[BOOT ERROR]", e?.response?.data || e.message));
+app.listen(PORT, () => {
+  console.log(`[WEB] listening on ${PORT}`);
+  boot().catch((e) => console.error(e));
 });
