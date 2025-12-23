@@ -37,7 +37,7 @@ async function askGeminiSmart(userText) {
   }
 
   const url =
-    "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=" +
+    "https://generativelanguage.googleapis.com/v1/models/gemini-flash-latest:generateContent?key=" +
     encodeURIComponent(GEMINI_API_KEY);
 
   const prompt = `You are "VTF Auto Pilot", an assistant for crypto education & community ops.
