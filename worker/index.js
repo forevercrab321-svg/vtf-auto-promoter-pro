@@ -10,11 +10,13 @@ function must(name, val) {
   }
 }
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+const TELEGRAM_CHANNEL_ID = (process.env.TELEGRAM_CHANNEL_ID || "").trim();
+const DISCORD_WEBHOOK_URL = (process.env.DISCORD_WEBHOOK_URL || "").trim();
+const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || "").trim();
+
+// 🔴 关键修复：给模型名字也加上 .trim()，防止 'gemini-pro ' 这种隐形错误
+const GEMINI_MODEL = (process.env.GEMINI_MODEL || "gemini-1.5-flash").trim();
 
 const PUBLIC_BASE_URL_RAW = process.env.PUBLIC_BASE_URL; 
 const WEBHOOK_SECRET = (process.env.WEBHOOK_SECRET || "").trim();
@@ -82,6 +84,7 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 async function askGeminiBilingual(userText) {
   try {
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    console.log(`[GEMINI] Using model: '${GEMINI_MODEL}'`); // 打印最终使用的模型名，方便排查
     const prompt = `You are "VTF Auto Pilot". Answer in BOTH English and Chinese.\nUser: ${userText}`;
     const result = await model.generateContent(prompt);
     return (result?.response?.text?.() || "").trim();
@@ -124,7 +127,7 @@ app.post(webhookRoute, async (req, res) => {
 
 async function boot() {
   console.log("🚀 WORKER BOOT", new Date().toISOString());
-  console.log("🔐 WEBHOOK_SECRET (Used) =", `"${WEBHOOK_SECRET}"`); 
+  console.log("🧠 GEMINI_MODEL (Fixed) =", `"${GEMINI_MODEL}"`); // 打印出来让你放心
   for (let i = 1; i <= 6; i++) {
     try {
       await tgSetWebhook();
