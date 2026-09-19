@@ -1,0 +1,21 @@
+{
+  "$comment": "Declarative manifest of external skills vendored into this repo. Run `npm run skills:update` to re-sync any skill to the ref below. Bump `ref` (or set it to a branch) to upgrade.",
+  "skills": [
+    {
+      "name": "nuwa-skill",
+      "displayName": "女娲 · Skill造人术 (Nuwa)",
+      "repo": "https://github.com/alchaincyf/nuwa-skill.git",
+      "ref": "fe0374687037c4cc51a65c1e0c145afe2981dc69",
+      "license": "MIT",
+      "author": "Huashu (花叔)",
+      "purpose": "Skill creation engine — distills a person's or topic's thinking (mental models, decision heuristics, expression DNA) into a runnable Agent Skill.",
+      "include": [
+        "SKILL.md",
+        "LICENSE",
+        "references",
+        "scripts"
+      ],
+      "exclude_note": "examples/ (2.5MB of demo perspective skills), promo/, .github/ and all PNG/JPG assets are intentionally NOT vendored — the engine does not need them. See PROVENANCE.md."
+    }
+  ]
+}

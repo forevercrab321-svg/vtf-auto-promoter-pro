@@ -137,6 +137,27 @@ full team on the Overview page.
 
 ---
 
+## Agent skills (upgradeable)
+
+Project-scoped agent skills live in [`.claude/skills/`](.claude/skills/README.md) —
+versioned in git, available to Claude Code and any runtime that reads the open
+[Agent Skills](https://agentskills.io) standard.
+
+Installed: **`nuwa-skill`** ([alchaincyf/nuwa-skill](https://github.com/alchaincyf/nuwa-skill), MIT) —
+a skill *creation engine* that distills how a person or topic thinks into a new
+runnable skill. It is the upgrade path for this project's agent capabilities.
+
+```bash
+npm run skills:check     # report upstream drift
+npm run skills:update    # re-sync vendored skills to the pinned refs
+```
+
+Skills are instructions; BountyOS's guardrails are code. No skill can widen
+scope or unblock a prohibited technique — see the boundary note in
+[`.claude/skills/README.md`](.claude/skills/README.md).
+
+---
+
 ## Deploying (Postgres / Supabase)
 
 1. In `prisma/schema.prisma`, set `datasource db { provider = "postgresql" }`.
