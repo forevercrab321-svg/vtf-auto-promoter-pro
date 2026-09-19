@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-ink-950 text-slate-200;
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-ink-700 bg-ink-900/60 p-5;
+  }
+  .card-title {
+    @apply text-sm font-semibold uppercase tracking-wide text-slate-400;
+  }
+  .stat {
+    @apply rounded-xl border border-ink-700 bg-ink-900/60 p-4;
+  }
+  .stat-value {
+    @apply text-2xl font-bold text-white;
+  }
+  .stat-label {
+    @apply mt-1 text-xs uppercase tracking-wide text-slate-400;
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:opacity-50;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center gap-2 rounded-lg border border-ink-700 px-3 py-2 text-sm font-medium text-slate-200 transition hover:border-slate-500;
+  }
+  .input {
+    @apply w-full rounded-lg border border-ink-700 bg-ink-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-indigo-500;
+  }
+  .label {
+    @apply mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400;
+  }
+  .table {
+    @apply w-full text-left text-sm;
+  }
+  .table th {
+    @apply border-b border-ink-700 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400;
+  }
+  .table td {
+    @apply border-b border-ink-800 px-3 py-2 align-top;
+  }
+  .pill {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold;
+  }
+}

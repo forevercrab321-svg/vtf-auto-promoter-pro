@@ -1,0 +1,375 @@
+// BountyOS — data model for a Bug Bounty AI Research Operating System.
+// Principle: AUTHORIZED ONLY · SCOPE FIRST · MINIMUM IMPACT · HUMAN CONTROL.
+//
+// Local dev uses SQLite (zero setup). To deploy on Postgres/Supabase, change
+// provider to "postgresql" and set DATABASE_URL accordingly (see .env.example).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// PROGRAM — an authorized Bug Bounty / VDP program.
+// ---------------------------------------------------------------------------
+model Program {
+  id                      String   @id @default(cuid())
+  name                    String
+  platform                String // HackerOne | Bugcrowd | Intigriti | YesWeHack | Immunefi | Self-hosted | Other
+  programUrl              String?
+  programType             String   @default("BugBounty") // BugBounty | VDP
+  publicProgram           Boolean  @default(true)
+  bountyAvailable         Boolean  @default(true)
+  minBounty               Int?
+  maxBounty               Int?
+  scopeSize               Int      @default(0) // number of in-scope assets (informational)
+  wildcardScope           Boolean  @default(false)
+  assetTypes              String   @default("[]") // JSON array of strings: web, api, mobile, source, etc.
+  webAvailable            Boolean  @default(true)
+  apiAvailable            Boolean  @default(false)
+  mobileAvailable         Boolean  @default(false)
+  sourceCodeAvailable     Boolean  @default(false)
+  automatedTestingAllowed  Boolean  @default(false)
+  rateLimit               String? // free text, e.g. "5 req/s"
+  prohibitedTesting       String   @default("[]") // JSON array of prohibited techniques
+  safeHarbor              Boolean  @default(false)
+  policyText              String   @default("") // raw natural-language policy pasted by the user
+  notes                   String   @default("")
+
+  // Program Intelligence output
+  opportunityScore        Float?
+  priority                String? // A | B | C
+  intelligence            String   @default("{}") // JSON: computed factors + rationale
+
+  lastUpdated             DateTime @default(now())
+  createdAt               DateTime @default(now())
+
+  assets         Asset[]
+  scopeRules     ScopeRule[]
+  targets        Target[]
+  authorizations AuthorizationToken[]
+  findings       Finding[]
+  reports        Report[]
+
+  @@index([priority])
+}
+
+// ---------------------------------------------------------------------------
+// SCOPE RULE — machine-readable scope produced by the Scope Guardian from the
+// program's natural-language policy. Every rule is either ALLOW or BLOCK.
+// ---------------------------------------------------------------------------
+model ScopeRule {
+  id          String  @id @default(cuid())
+  programId   String
+  program     Program @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  kind        String // ALLOW | BLOCK
+  ruleType    String // DOMAIN | SUBDOMAIN | WILDCARD | APP | API_HOST | METHOD | ASSET | TEST_ACCOUNT
+  pattern     String // e.g. "*.example.com", "api.example.com", "DoS", "prod-db"
+  note        String  @default("")
+  ruleSource  String  @default("policy") // where this rule came from
+  createdAt   DateTime @default(now())
+
+  @@index([programId, kind])
+}
+
+// ---------------------------------------------------------------------------
+// ASSET — a concrete in-scope (or explicitly out-of-scope) asset.
+// ---------------------------------------------------------------------------
+model Asset {
+  id         String  @id @default(cuid())
+  programId  String
+  program    Program @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  identifier String // domain / host / package name / repo
+  assetType  String   @default("web") // web | api | mobile | source | cloud | other
+  inScope    Boolean  @default(true)
+  notes      String   @default("")
+  createdAt  DateTime @default(now())
+
+  targets Target[]
+
+  @@index([programId])
+}
+
+// ---------------------------------------------------------------------------
+// TARGET — a prioritized unit of research within a program.
+// ---------------------------------------------------------------------------
+model Target {
+  id          String   @id @default(cuid())
+  programId   String
+  program     Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+  assetId     String?
+  asset       Asset?   @relation(fields: [assetId], references: [id])
+
+  name        String
+  url         String?
+  targetType  String   @default("web") // web | api | mobile | source
+
+  // Scope Guardian verdict cached on the target for fast dashboard rendering.
+  scopeStatus String   @default("SCOPE_UNKNOWN") // IN_SCOPE | OUT_OF_SCOPE | SCOPE_UNKNOWN
+  safetyState String   @default("YELLOW") // GREEN | YELLOW | RED
+  scopeReason String   @default("")
+
+  priority    String? // A | B | C
+  priorityScore Float?
+
+  techStack   String   @default("[]") // JSON array
+  notes       String   @default("")
+  createdAt   DateTime @default(now())
+
+  attackSurfaces AttackSurfaceItem[]
+  hypotheses     Hypothesis[]
+  tests          SafeTest[]
+  findings       Finding[]
+
+  @@index([programId])
+  @@index([safetyState])
+}
+
+// ---------------------------------------------------------------------------
+// AUTHORIZATION TOKEN — no test runs without a valid, scope-verified token.
+// ---------------------------------------------------------------------------
+model AuthorizationToken {
+  id              String   @id @default(cuid())
+  programId       String
+  program         Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  target          String // target identifier this token authorizes
+  assetType       String
+  plannedTestType String
+  scopeVerified   Boolean  @default(false)
+  ruleSource      String   @default("")
+  rateLimit       String?
+  status          String   @default("ACTIVE") // ACTIVE | EXPIRED | REVOKED
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+
+  tests SafeTest[]
+
+  @@index([programId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// ATTACK SURFACE ITEM — categorized surface derived from the asset graph.
+// ---------------------------------------------------------------------------
+model AttackSurfaceItem {
+  id         String   @id @default(cuid())
+  targetId   String
+  target     Target   @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  category   String // Authentication | Authorization | IDOR/BOLA | API | GraphQL | BusinessLogic | ...
+  component  String // endpoint / feature / flow
+  priority   String   @default("MEDIUM") // HIGH | MEDIUM | LOW
+  rationale  String   @default("")
+  createdAt  DateTime @default(now())
+
+  @@index([targetId])
+}
+
+// ---------------------------------------------------------------------------
+// HYPOTHESIS — a testable security hypothesis. No blind scanning.
+// ---------------------------------------------------------------------------
+model Hypothesis {
+  id                    String   @id @default(cuid())
+  targetId              String
+  target                Target   @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  title                 String
+  category              String   @default("Authorization")
+  precondition          String   @default("")
+  expectedSecureBehavior String  @default("")
+  testStrategy          String   @default("")
+  riskLevel             String   @default("LOW") // LOW | MEDIUM | HIGH
+  automationAllowed     Boolean  @default(false)
+  humanApprovalRequired Boolean  @default(true)
+  potentialImpact       String   @default("")
+  status                String   @default("PROPOSED") // PROPOSED | PLANNED | TESTED | DISCARDED
+  createdAt             DateTime @default(now())
+
+  tests SafeTest[]
+
+  @@index([targetId])
+}
+
+// ---------------------------------------------------------------------------
+// SAFE TEST — a planned, gated test task. Execution is manual + human-gated;
+// the system tracks intent, authorization, and results. It does NOT auto-attack.
+// ---------------------------------------------------------------------------
+model SafeTest {
+  id             String   @id @default(cuid())
+  targetId       String
+  target         Target   @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  hypothesisId   String?
+  hypothesis     Hypothesis? @relation(fields: [hypothesisId], references: [id])
+  authorizationId String?
+  authorization  AuthorizationToken? @relation(fields: [authorizationId], references: [id])
+
+  title          String
+  testType       String   @default("manual")
+  plannedAction  String   @default("")
+  potentialImpact String  @default("")
+  // Supervisor / approval lifecycle:
+  status         String   @default("BLOCKED") // BLOCKED | AUTHORIZED | HUMAN_APPROVAL_REQUIRED | READY | EXECUTED | ABORTED
+  supervisorVerdict String @default("{}") // JSON of the 9-question gate
+  minimumProofOnly Boolean @default(true)
+  result         String   @default("") // researcher-entered observation
+  createdAt      DateTime @default(now())
+
+  findings Finding[]
+
+  @@index([targetId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// FINDING — a potential/confirmed issue.
+// ---------------------------------------------------------------------------
+model Finding {
+  id            String   @id @default(cuid())
+  programId     String
+  program       Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+  targetId      String?
+  target        Target?  @relation(fields: [targetId], references: [id])
+  testId        String?
+  test          SafeTest? @relation(fields: [testId], references: [id])
+
+  title         String
+  vulnType      String   @default("Authorization")
+  severity      String   @default("MEDIUM") // INFO | LOW | MEDIUM | HIGH | CRITICAL
+  summary       String   @default("")
+
+  // Validation Agent
+  validationState String @default("POTENTIAL") // POTENTIAL | CONFIRMED | LIKELY | UNCERTAIN | FALSE_POSITIVE
+  reproducible    Boolean @default(false)
+  businessImpact  String  @default("")
+
+  // Duplicate Risk Agent
+  duplicateRisk String   @default("UNKNOWN") // LOW | MEDIUM | HIGH | UNKNOWN
+  duplicateNotes String  @default("")
+
+  // Submission tracking (Reward / ROI)
+  submissionState String @default("DRAFT") // DRAFT | READY | SUBMITTED | ACCEPTED | DUPLICATE | INFORMATIVE | NA
+  bountyAmount    Int?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+
+  evidence Evidence[]
+  reports  Report[]
+
+  @@index([programId])
+  @@index([validationState])
+  @@index([submissionState])
+}
+
+// ---------------------------------------------------------------------------
+// EVIDENCE — minimal, redacted proof attached to a finding.
+// ---------------------------------------------------------------------------
+model Evidence {
+  id          String   @id @default(cuid())
+  findingId   String
+  finding     Finding  @relation(fields: [findingId], references: [id], onDelete: Cascade)
+
+  label       String
+  accountContext String @default("")
+  requestData String   @default("") // stored REDACTED
+  responseData String  @default("") // stored REDACTED
+  expectedResult String @default("")
+  actualResult String  @default("")
+  redacted    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([findingId])
+}
+
+// ---------------------------------------------------------------------------
+// REPORT — a drafted bug bounty report.
+// ---------------------------------------------------------------------------
+model Report {
+  id         String   @id @default(cuid())
+  programId  String
+  program    Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+  findingId  String?
+  finding    Finding? @relation(fields: [findingId], references: [id])
+
+  title      String
+  markdown   String   @default("")
+  status     String   @default("DRAFT") // DRAFT | HUMAN_REVIEW | READY_TO_SUBMIT | SUBMITTED
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  @@index([programId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// APPROVAL — Human Approval Gate request for sensitive actions.
+// ---------------------------------------------------------------------------
+model Approval {
+  id            String   @id @default(cuid())
+  subjectType   String // TEST | FINDING | ACTION
+  subjectId     String?
+  target        String   @default("")
+  potentialFinding String @default("")
+  plannedAction String   @default("")
+  potentialImpact String @default("")
+  policyRule    String   @default("")
+  reason        String   @default("") // why approval is required
+  status        String   @default("PENDING") // PENDING | APPROVED | REJECTED | MODIFIED
+  decidedBy     String   @default("")
+  decisionNote  String   @default("")
+  createdAt     DateTime @default(now())
+  decidedAt     DateTime?
+
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// KNOWLEDGE ENTRY — reusable research knowledge base.
+// ---------------------------------------------------------------------------
+model KnowledgeEntry {
+  id         String   @id @default(cuid())
+  category   String // Program | Asset | Technology | AuthModel | FindingPattern | FalsePositive | Duplicate | Lesson
+  title      String
+  body       String   @default("")
+  tags       String   @default("[]") // JSON array
+  programRef String? // optional program name/id reference
+  createdAt  DateTime @default(now())
+
+  @@index([category])
+}
+
+// ---------------------------------------------------------------------------
+// RESEARCH LOG — activity + metrics feed for the ROI dashboard.
+// ---------------------------------------------------------------------------
+model ResearchLog {
+  id         String   @id @default(cuid())
+  kind       String // PROGRAM_REVIEWED | TARGET_REVIEWED | HYPOTHESIS | TEST | FINDING | REPORT | SUBMISSION
+  refId      String?
+  detail     String   @default("")
+  hours      Float    @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([kind])
+}
+
+// ---------------------------------------------------------------------------
+// AGENT RUN — audit log of Supervisor / agent decisions.
+// ---------------------------------------------------------------------------
+model AgentRun {
+  id         String   @id @default(cuid())
+  agent      String // e.g. "ScopeGuardian", "SecuritySupervisor"
+  action     String
+  input      String   @default("{}")
+  output     String   @default("{}")
+  verdict    String   @default("") // ALLOW | BLOCK | HUMAN_APPROVAL_REQUIRED | INFO
+  createdAt  DateTime @default(now())
+
+  @@index([agent])
+}
