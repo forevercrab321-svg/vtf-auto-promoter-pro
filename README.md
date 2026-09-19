@@ -137,6 +137,34 @@ full team on the Overview page.
 
 ---
 
+## Security Knowledge Base (vulnerability pattern library)
+
+`src/lib/knowledge/` holds **22 vulnerability patterns** across four families
+(Authorization, Authentication, Business Logic, Server Side). Each pattern is a
+**reasoning chain**, not a definition — 13 structured fields:
+
+```
+when to suspect (observation) → research hypothesis → security boundary →
+minimum-impact test → evidence (unexpected behavior) → false-positive
+conditions → honest impact → detection heuristic → root cause → remediation
+```
+
+Every pattern cites **public, freely-licensed authorities** — OWASP API Top 10
+(2023), OWASP WSTG/ASVS, MITRE CWE, PortSwigger Web Security Academy — plus
+publicly disclosed reports. Nothing is derived from copyrighted books, so the
+library ships clean, stays citable in reports, and keeps updating.
+
+It is wired through the whole pipeline: **Attack Surface → `hypothesesFromPatterns()`
+→ Supervisor-gated test → finding → report** (a report auto-carries the pattern's
+remediation and source citations via the finding→test→hypothesis→pattern link).
+
+- Browse it at **`/patterns`** or via `GET /api/patterns` (`?family=` / `?surface=` / `?q=`).
+- Agents reason with it through the **`vuln-pattern-library`** skill.
+- `npm test` validates library integrity (completeness, citations, approval gating).
+
+Add or revise a pattern by editing `src/lib/knowledge/patterns.<family>.ts`
+(keep all 13 fields and a public citation); the taxonomy derives itself.
+
 ## Agent skills (upgradeable)
 
 Project-scoped agent skills live in [`.claude/skills/`](.claude/skills/README.md) —

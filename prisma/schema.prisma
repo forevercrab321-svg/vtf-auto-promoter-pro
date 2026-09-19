@@ -182,6 +182,7 @@ model Hypothesis {
 
   title                 String
   category              String   @default("Authorization")
+  patternId             String? // links to a VulnPattern in the knowledge base (src/lib/knowledge)
   precondition          String   @default("")
   expectedSecureBehavior String  @default("")
   testStrategy          String   @default("")

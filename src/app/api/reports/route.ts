@@ -2,6 +2,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ok, bad, handleError } from "@/lib/api";
 import { draftReport } from "@/lib/report";
+import { getPattern, remediationFor, citationUrl, citationLabel } from "@/lib/knowledge";
 
 export async function GET() {
   try {
@@ -35,9 +36,23 @@ export async function POST(req: Request) {
     const body = Generate.parse(await req.json());
     const finding = await prisma.finding.findUnique({
       where: { id: body.findingId },
-      include: { program: true, target: true, evidence: true },
+      include: {
+        program: true,
+        target: true,
+        evidence: true,
+        test: { include: { hypothesis: true } },
+      },
     });
     if (!finding) return bad("Finding not found", 404);
+
+    // Trace finding → test → hypothesis → knowledge-base pattern so the report
+    // can cite authoritative sources and a vetted remediation.
+    const patternId = finding.test?.hypothesis?.patternId ?? null;
+    const pattern = patternId ? getPattern(patternId) : undefined;
+    const references = pattern
+      ? pattern.citations.map((c) => `${citationLabel(c.source, c.ref)} — ${citationUrl(c.source, c.ref, c.url)}`)
+      : [];
+    const patternRemediation = pattern ? remediationFor(pattern.id) : "";
 
     const markdown = await draftReport({
       vulnType: finding.vulnType,
@@ -54,7 +69,8 @@ export async function POST(req: Request) {
       proof:
         body.proof ||
         finding.evidence.map((e) => `**${e.label}**\n${e.actualResult}`).join("\n\n"),
-      remediation: body.remediation,
+      remediation: body.remediation || patternRemediation,
+      references,
     });
 
     const report = await prisma.report.create({

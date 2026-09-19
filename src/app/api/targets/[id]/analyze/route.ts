@@ -2,7 +2,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ok, bad, handleError, parseJsonArray } from "@/lib/api";
 import { baselineSurface } from "@/lib/attack-surface";
-import { suggestHypotheses } from "@/lib/hypotheses";
+import { hypothesesFromPatterns } from "@/lib/hypotheses";
 import { scoreTarget } from "@/lib/opportunity";
 
 const Body = z.object({
@@ -52,13 +52,14 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     });
 
     const categories = surfaces.map((s) => s.category);
-    const templates = suggestHypotheses(categories);
+    const derived = hypothesesFromPatterns(categories);
     await prisma.hypothesis.deleteMany({ where: { targetId: target.id, status: "PROPOSED" } });
     await prisma.hypothesis.createMany({
-      data: templates.map((t) => ({
+      data: derived.map((t) => ({
         targetId: target.id,
         title: t.title,
         category: t.category,
+        patternId: t.patternId,
         precondition: t.precondition,
         expectedSecureBehavior: t.expectedSecureBehavior,
         testStrategy: t.testStrategy,
@@ -87,14 +88,14 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       data: {
         kind: "HYPOTHESIS",
         refId: target.id,
-        detail: `Mapped ${surfaces.length} surfaces, ${templates.length} hypotheses`,
+        detail: `Mapped ${surfaces.length} surfaces, ${derived.length} pattern-derived hypotheses`,
         hours: 0.5,
       },
     });
 
     return ok({
       surfaces,
-      hypotheses: templates.length,
+      hypotheses: derived.length,
       priority: ps.priority,
       priorityScore: ps.score,
       techStack: parseJsonArray(target.techStack),

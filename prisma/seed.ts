@@ -6,7 +6,7 @@ import { PrismaClient } from "@prisma/client";
 import { scoreProgram } from "../src/lib/opportunity";
 import { checkScope, type ScopeRuleInput } from "../src/lib/scope-guardian";
 import { baselineSurface } from "../src/lib/attack-surface";
-import { suggestHypotheses } from "../src/lib/hypotheses";
+import { hypothesesFromPatterns } from "../src/lib/hypotheses";
 import { scoreTarget } from "../src/lib/opportunity";
 import { redact } from "../src/lib/redact";
 
@@ -128,12 +128,13 @@ async function main() {
       rationale: s.rationale,
     })),
   });
-  const templates = suggestHypotheses(surfaces.map((s) => s.category));
+  const derived = hypothesesFromPatterns(surfaces.map((s) => s.category));
   await prisma.hypothesis.createMany({
-    data: templates.map((t) => ({
+    data: derived.map((t) => ({
       targetId: acmeApi.id,
       title: t.title,
       category: t.category,
+      patternId: t.patternId,
       precondition: t.precondition,
       expectedSecureBehavior: t.expectedSecureBehavior,
       testStrategy: t.testStrategy,
@@ -142,6 +143,10 @@ async function main() {
       potentialImpact: t.potentialImpact,
       status: "PROPOSED",
     })),
+  });
+  // Grab the IDOR hypothesis so the demo test/finding/report chain can cite it.
+  const idorHypothesis = await prisma.hypothesis.findFirst({
+    where: { targetId: acmeApi.id, patternId: "authz-idor" },
   });
   const highValue = surfaces.filter((s) => s.priority === "HIGH").length;
   const ps = scoreTarget({ scopeStatus: "IN_SCOPE", highValueSurfaces: highValue, totalSurfaces: surfaces.length, hasApi: true });
@@ -162,11 +167,13 @@ async function main() {
     },
   });
 
-  // A safe, authorized test (no sensitive flags → AUTHORIZED).
-  await prisma.safeTest.create({
+  // A safe, authorized test (no sensitive flags → AUTHORIZED), linked to the
+  // IDOR hypothesis so its finding/report can cite the knowledge-base pattern.
+  const idorTest = await prisma.safeTest.create({
     data: {
       targetId: acmeApi.id,
       authorizationId: token.id,
+      hypothesisId: idorHypothesis?.id,
       title: "IDOR check on GET /v1/objects/{id}",
       plannedAction: "As self-owned account B, request account A's object id once. Compare 200 vs 403.",
       potentialImpact: "Cross-user object read if ownership isn't enforced.",
@@ -208,6 +215,7 @@ async function main() {
     data: {
       programId: acme.id,
       targetId: acmeApi.id,
+      testId: idorTest.id,
       title: "IDOR on GET /v1/objects/{id} exposes other users' objects",
       vulnType: "IDOR / BOLA",
       severity: "HIGH",

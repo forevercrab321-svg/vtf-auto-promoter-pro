@@ -6,6 +6,8 @@
 // always gated by Scope Guardian + Supervisor + (usually) human approval.
 // ============================================================================
 
+import { patternsForSurfaces } from "./knowledge";
+
 export interface HypothesisTemplate {
   title: string;
   category: string;
@@ -165,4 +167,42 @@ export function suggestHypotheses(surfaceCategories: string[]): HypothesisTempla
   const workhorses = HYPOTHESIS_TEMPLATES.slice(0, 2);
   const merged = [...new Set([...workhorses, ...matches])];
   return merged;
+}
+
+// ---------------------------------------------------------------------------
+// KNOWLEDGE-BASE-DERIVED HYPOTHESES
+// The preferred path: turn Vulnerability Patterns (the distilled reasoning
+// chains in src/lib/knowledge) into concrete, testable hypotheses for a target.
+// Each carries the pattern id, so a resulting finding/report can cite its
+// authoritative sources and remediation.
+// ---------------------------------------------------------------------------
+export interface DerivedHypothesis {
+  patternId: string;
+  title: string;
+  category: string;
+  precondition: string;
+  expectedSecureBehavior: string;
+  testStrategy: string;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH";
+  humanApprovalRequired: boolean;
+  potentialImpact: string;
+}
+
+export function hypothesesFromPatterns(surfaceCategories: string[]): DerivedHypothesis[] {
+  const patterns = patternsForSurfaces(surfaceCategories);
+  // If nothing matched (bare target), fall back to the two authorization workhorses.
+  const chosen = patterns.length
+    ? patterns
+    : patternsForSurfaces(["Authorization", "IDOR / BOLA"]);
+  return chosen.map((p) => ({
+    patternId: p.id,
+    title: p.researchHypothesis,
+    category: p.subfamily,
+    precondition: p.precondition,
+    expectedSecureBehavior: p.securityBoundary,
+    testStrategy: `${p.test}\n\nSignal to look for: ${p.observation}\nHeuristic: ${p.detectionHeuristic}`,
+    riskLevel: p.severityBand === "CRITICAL" || p.severityBand === "HIGH" ? "HIGH" : p.severityBand === "MEDIUM" ? "MEDIUM" : "LOW",
+    humanApprovalRequired: p.requiresHumanApproval,
+    potentialImpact: p.impact,
+  }));
 }

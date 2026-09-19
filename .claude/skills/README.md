@@ -12,6 +12,7 @@ rather than pasting long instructions into a prompt.
 
 | Skill | What it does | Source |
 |---|---|---|
+| `vuln-pattern-library` | **Project-authored.** Teaches an agent to *reason with* the Security Knowledge Base (`src/lib/knowledge/`): for an in-scope target, which vulnerability patterns to suspect, what signal to look for, how to design a minimum-impact test, what counts as evidence, and what is a false positive. The reasoning endpoint of the Book→Pattern→Hypothesis→Report pipeline. | This repo |
 | `nuwa-skill` | **Skill creation engine.** Distills how a person or topic *thinks* — mental models, decision heuristics, expression DNA, anti-patterns, honest limits — into a new runnable skill. | [alchaincyf/nuwa-skill](https://github.com/alchaincyf/nuwa-skill) (MIT) |
 
 ### Using Nuwa

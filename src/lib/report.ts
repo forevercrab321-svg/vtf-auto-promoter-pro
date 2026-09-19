@@ -21,6 +21,7 @@ export interface ReportInput {
   maxReasonableImpact: string;
   proof: string; // minimal proof (redacted)
   remediation: string;
+  references?: string[]; // e.g. "OWASP API Security Top 10 · API1:2023 — https://…"
 }
 
 /** Deterministic Markdown report following the required structure. */
@@ -61,7 +62,11 @@ ${redact(input.proof) || "(Minimum necessary evidence. Secrets/PII redacted.)"}
 
 ## Remediation
 ${input.remediation || "(Concrete, actionable fix direction for the engineering team.)"}
-
+${
+  input.references && input.references.length
+    ? `\n## References\n${input.references.map((r) => `- ${r}`).join("\n")}\n`
+    : ""
+}
 ---
 _Drafted by BountyOS. Human review required before submission. Verify every claim; keep impact accurate._
 `;
