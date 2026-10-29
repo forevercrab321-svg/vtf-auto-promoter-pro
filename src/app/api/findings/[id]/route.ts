@@ -38,6 +38,16 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const existing = await prisma.finding.findUnique({ where: { id: params.id } });
     if (!existing) return bad("Finding not found", 404);
 
+    // Guard: CONFIRMED is proof-required and cannot be set by hand. It is only
+    // written by the validation engine (POST /api/findings/:id/validate) when
+    // every proof-required criterion is met. This is the acceptance-rate moat.
+    if (body.validationState === "CONFIRMED" && existing.validationState !== "CONFIRMED") {
+      return bad(
+        "CONFIRMED is proof-required — run the validation gate (POST /api/findings/:id/validate), don't set it manually.",
+        409,
+      );
+    }
+
     // Guard: only CONFIRMED findings may advance to READY/SUBMITTED.
     if (
       body.submissionState &&
