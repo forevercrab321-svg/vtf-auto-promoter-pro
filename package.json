@@ -16,7 +16,8 @@
     "db:reset": "prisma db push --force-reset && npm run db:seed",
     "setup": "prisma generate && prisma db push && npm run db:seed",
     "skills:update": "node scripts/update-skills.mjs",
-    "skills:check": "node scripts/update-skills.mjs --check"
+    "skills:check": "node scripts/update-skills.mjs --check",
+    "db:seed:lab": "tsx prisma/seed.lab.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
